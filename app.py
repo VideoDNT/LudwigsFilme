@@ -13,24 +13,16 @@ START = BASE + "/webOPACClient/start.do"
 SEARCH = BASE + "/webOPACClient/search.do"
 
 
-def clean_title(text):
-    # 🔥 NUR das entfernen, sonst nichts verändern
-    text = text.replace("¬", "")
-    text = text.replace("[Bildtonträger]", "")
-    text = text.replace("(Bildtonträger)", "")
-    return text.strip()
-
-
+# 🔍 Suche im OPAC
 def search_opac(title):
     session = requests.Session()
 
     try:
+        # 1. Session starten
         session.get(START, timeout=10)
         session.get(SEARCH, timeout=10)
 
-        print("\n==============================")
-        print("Suche:", title)
-
+        # 2. Suche senden
         params = {
             "methodToCall": "submit",
             "searchCategories[0]": "-1",
@@ -38,52 +30,40 @@ def search_opac(title):
             "submitSearch": "Suchen"
         }
 
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
         r = session.get(SEARCH, params=params, headers=headers, timeout=10)
 
         soup = BeautifulSoup(r.text, "html.parser")
 
-        hits = soup.select("h2.recordtitle a")
+        # 🔥 Nur echte Treffer (Titel) holen
+        hits = soup.select(".recordtitle a")
 
-        print("Gefundene Treffer:", len(hits))
-
-        best_match = None
         best_score = 0
+        best_match = None
 
-        for hit in hits:
-            hit_title = hit.get_text(strip=True)
-            hit_title = hit_title.replace("¬", "")
+        for h in hits:
+            text = h.get_text(strip=True)
 
-            # 🔥 weiterhin nur DVDs zulassen
-            if "bildtonträger" not in hit_title.lower():
-                continue
-
-            # 🔥 HIER Änderung: bereinigte Titel vergleichen
-            clean_input = clean_title(title).lower()
-            clean_hit = clean_title(hit_title).lower()
-
-            score = fuzz.ratio(clean_input, clean_hit)
-
-            print(f"→ {hit_title} (Score: {score})")
+            score = fuzz.partial_ratio(title.lower(), text.lower())
 
             if score > best_score:
                 best_score = score
-                best_match = hit_title
+                best_match = text
 
-        if best_match and best_score > 65:
-            return {
-                "found": True,
-                "title": best_match
-            }
-
-        return {"found": False}
+        # 🔥 Nur gute Treffer akzeptieren
+        if best_score > 70:
+            return True, best_match, best_score
+        else:
+            return False, best_match, best_score
 
     except Exception as e:
-        print("Fehler:", e)
-        return {"found": False}
+        return False, str(e), 0
 
 
+# 🌐 Startseite
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
@@ -103,6 +83,7 @@ def home():
     """
 
 
+# 📊 CSV prüfen
 @app.post("/check", response_class=HTMLResponse)
 async def check(file: UploadFile = File(...)):
     content = await file.read()
@@ -114,22 +95,42 @@ async def check(file: UploadFile = File(...)):
 
     reader = csv.DictReader(StringIO(csv_text))
 
-    html = "<h2>Ergebnisse</h2><ul>"
+    html = """
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body style="font-family:sans-serif; padding:20px;">
+    <h2>Ergebnisse</h2>
+    <ul>
+    """
 
     for row in reader:
         title = row.get("Name") or ""
         if not title:
             continue
 
-        result = search_opac(title)
+        found, match, score = search_opac(title)
 
-        if result["found"]:
-            status = f"✅ gefunden: {result['title']}"
+        if found:
+            status = f"✅ gefunden ({match})"
         else:
-            status = "❌ nicht gefunden"
+            status = f"❌ nicht gefunden (Score {score})"
 
-        html += f"<li>{title} — {status}</li>"
+        html += f"<li><b>{title}</b> — {status}</li>"
 
-    html += "</ul><br><a href='/'>Zurück</a>"
+    html += """
+    </ul>
+    <br><a href="/">Zurück</a>
+    </body>
+    </html>
+    """
 
-    return html
+    # 🔥 WICHTIG: Cache deaktivieren → Fix für dein Problem
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache"
+        }
+    )

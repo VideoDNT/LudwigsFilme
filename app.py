@@ -186,7 +186,7 @@ def mein_suchscript(letterboxd_username):
                     bester_score = score
                     bester_treffer = kandidat
 
-            if bester_treffer:
+            if bester_treffer and bester_score > 50:
                 bester_treffer["poster_url"] = get_real_poster_url(letterboxd_film_url)
                 fertige_liste.append(bester_treffer)
             else:
